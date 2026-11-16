@@ -1,0 +1,976 @@
+Turning each block into a **dynamic key-value form** makes the whole system much cleaner and way more flexible—you aren't locked into rigid sub-blocks, and you can define whatever fields you need (like `Subject Outfit`, `Camera Angle`, `Analysis Focus`, etc.) on the fly.
+
+Below is a **complete, ready-to-use interactive web app** in a single file. Just save it as `pipeline-builder.html` and double-click it to open in any browser (no server or install needed).
+
+### What’s Built In
+* **Top-Down Visual Blocks:** Click any block header to expand or collapse it. Reorder blocks up/down, swap block types, or insert new blocks anywhere in the flow.
+* **Dynamic Form Rows Inside Every Block:** Add as many `[ Field Name ]` → `[ Content ]` rows as you want. Each row can also be toggled between:
+  * **Form Field** (standard `Name: Content`, e.g., `Subject Outfit` → description)
+  * **Photo Ref** (attaches a reference image preview + notes, e.g., `Subject Ref`, `Scene Ref`, `Analysis-Only Ref`)
+  * **+ Positive** / **- Negative** (tags constraints clearly in the output)
+* **Reusable Template Dropdown:** Pre-loaded with *Video Generation*, *Video Analyst*, and *Visual Analyst (2-Item Study)*—plus you can save your own modified pipelines as custom templates in your browser.
+* **Live Markdown Output:** Updates in real time on the right as you type, with one-click **Copy** and **Download `.md`** buttons.
+
+---
+
+### `pipeline-builder.html`
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Visual Pipeline & Prompt Builder</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #181b24;
+      --surface-2: #202431;
+      --border: #2c3244;
+      --border-hover: #46506e;
+      --text: #e8ecf4;
+      --muted: #939db3;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --pos: #10b981;
+      --neg: #ef4444;
+      --img: #f59e0b;
+      --radius: 10px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+
+    /* Top Bar */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 24px;
+      background: rgba(15, 17, 23, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+    }
+
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    select, input, textarea, button {
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text);
+      border-radius: 7px;
+    }
+
+    select, input[type="text"], textarea {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    select:focus, input[type="text"]:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      padding: 8px 12px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+
+    button:hover {
+      border-color: var(--border-hover);
+      background: #282d3d;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    button.primary:hover {
+      background: var(--accent-hover);
+    }
+
+    button.danger {
+      color: #fca5a5;
+    }
+
+    button.danger:hover {
+      border-color: var(--neg);
+      background: rgba(239, 68, 68, 0.12);
+    }
+
+    /* Main Split Layout */
+    .workspace {
+      display: grid;
+      grid-template-columns: 1.25fr 0.95fr;
+      gap: 24px;
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 24px;
+      align-items: start;
+    }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+    }
+
+    /* Pipeline Column */
+    .pipeline-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .pipeline-title-input {
+      font-size: 18px !important;
+      font-weight: 700;
+      flex: 1;
+      background: transparent !important;
+      border: 1px solid transparent !important;
+      padding: 6px 8px !important;
+    }
+
+    .pipeline-title-input:hover,
+    .pipeline-title-input:focus {
+      background: var(--surface) !important;
+      border-color: var(--border) !important;
+    }
+
+    .pipeline-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    /* Connector Arrows between blocks */
+    .connector {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 4px 0;
+      color: var(--muted);
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .connector-line {
+      width: 2px;
+      height: 14px;
+      background: var(--border-hover);
+    }
+
+    .connector-arrow {
+      line-height: 1;
+      color: var(--accent-hover);
+      font-size: 13px;
+    }
+
+    /* Block Card */
+    .block {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+
+    .block:hover {
+      border-color: var(--border-hover);
+    }
+
+    .block-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      cursor: pointer;
+      background: var(--surface-2);
+      user-select: none;
+    }
+
+    .block-head-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      flex: 1;
+    }
+
+    .step-badge {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: rgba(99, 102, 241, 0.18);
+      color: var(--accent-hover);
+      font-size: 12px;
+      font-weight: 700;
+      display: grid;
+      place-items: center;
+      flex-shrink: 0;
+    }
+
+    .block-title-display {
+      font-weight: 600;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .block-meta {
+      font-size: 12px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    .block-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .icon-btn {
+      padding: 4px 8px;
+      font-size: 12px;
+      background: var(--surface);
+    }
+
+    .chevron {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 4px;
+      transition: transform 0.15s;
+    }
+
+    .block.expanded .chevron {
+      transform: rotate(180deg);
+    }
+
+    /* Expanded Block Body */
+    .block-body {
+      display: none;
+      padding: 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    .block.expanded .block-body {
+      display: block;
+    }
+
+    .block-settings {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px dashed var(--border);
+    }
+
+    .block-settings label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      flex: 1;
+      min-width: 180px;
+    }
+
+    /* Dynamic Form Rows */
+    .fields-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .field-row {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .field-row[data-kind="positive"] { border-left: 3px solid var(--pos); }
+    .field-row[data-kind="negative"] { border-left: 3px solid var(--neg); }
+    .field-row[data-kind="image"] { border-left: 3px solid var(--img); }
+
+    .field-top {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .field-kind {
+      width: 125px;
+      flex-shrink: 0;
+    }
+
+    .field-name {
+      flex: 1;
+      min-width: 150px;
+      font-weight: 600;
+    }
+
+    .field-content {
+      width: 100%;
+      min-height: 58px;
+      resize: vertical;
+    }
+
+    .image-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .image-preview {
+      width: 56px;
+      height: 56px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+    }
+
+    .image-filename {
+      font-size: 12px;
+      color: var(--img);
+    }
+
+    .add-field-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .add-block-footer {
+      display: flex;
+      justify-content: center;
+      margin-top: 14px;
+    }
+
+    /* Markdown Output Panel */
+    .output-panel {
+      position: sticky;
+      top: 78px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 102px);
+    }
+
+    .output-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+      border-radius: var(--radius) var(--radius) 0 0;
+    }
+
+    .output-head h2 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .output-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .markdown-preview {
+      margin: 0;
+      padding: 16px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      color: #d6deeb;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>Visual Pipeline Form Builder</span>
+    </div>
+    <div class="toolbar">
+      <label style="font-size:12px;color:var(--muted)">Template:</label>
+      <select id="templateSelect"></select>
+      <button id="saveTemplateBtn" title="Save current blocks as a reusable template">Save as Template</button>
+      <button id="expandAllBtn">Expand All</button>
+      <button id="collapseAllBtn">Collapse All</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <!-- Left: Top-Down Visual Blocks -->
+    <section>
+      <div class="pipeline-header">
+        <input id="pipelineTitle" class="pipeline-title-input" type="text" placeholder="Pipeline Name..." />
+      </div>
+      <div id="pipelineStack" class="pipeline-stack"></div>
+      <div class="add-block-footer">
+        <button id="addBlockBtn" class="primary">+ Add Block to Bottom</button>
+      </div>
+    </section>
+
+    <!-- Right: Live Compiled Markdown -->
+    <aside class="output-panel">
+      <div class="output-head">
+        <h2>Compiled Markdown Output</h2>
+        <div class="output-actions">
+          <button id="copyMdBtn">Copy Markdown</button>
+          <button id="downloadMdBtn" class="primary">Download .md</button>
+        </div>
+      </div>
+      <pre id="markdownPreview" class="markdown-preview"></pre>
+    </aside>
+  </main>
+
+  <script>
+    const uid = () => Math.random().toString(36).slice(2, 9);
+
+    const BLOCK_TYPES = [
+      "Overarching Request",
+      "Model & Task",
+      "Concept & Scene",
+      "Subject Details",
+      "Reference Photos",
+      "Constraints",
+      "Custom Section"
+    ];
+
+    const DEFAULT_TEMPLATES = {
+      "video-gen": {
+        label: "Video Generation Pipeline",
+        title: "Video Generation Pipeline",
+        blocks: [
+          {
+            id: uid(), title: "Overarching Request", type: "Overarching Request", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "Goal", content: "Create a 6-second cinematic product reveal video." }
+            ]
+          },
+          {
+            id: uid(), title: "Model & Output Format", type: "Model & Task", expanded: false,
+            fields: [
+              { id: uid(), kind: "text", name: "Target Model", content: "Video Gen Model" },
+              { id: uid(), kind: "text", name: "Aspect Ratio & Length", content: "16:9, 6 seconds, 24fps" }
+            ]
+          },
+          {
+            id: uid(), title: "Scene & Subject", type: "Concept & Scene", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "What the Video Is About", content: "Subject checks their wristwatch before stepping out of a cab." },
+              { id: uid(), kind: "text", name: "Subject Outfit", content: "Charcoal wool overcoat, crisp white shirt, leather gloves." },
+              { id: uid(), kind: "text", name: "Scene Environment", content: "Rainy city street at dusk with warm neon reflections on wet pavement." }
+            ]
+          },
+          {
+            id: uid(), title: "Reference Photos", type: "Reference Photos", expanded: false,
+            fields: [
+              { id: uid(), kind: "image", name: "Subject Action Ref", content: "Apply pose and watch closeup framing to the subject.", imageName: "", imageUrl: "" },
+              { id: uid(), kind: "image", name: "Scene Environment Ref", content: "Use this street setting and wet reflections as the backdrop.", imageName: "", imageUrl: "" },
+              { id: uid(), kind: "image", name: "Analysis-Only Ref (Style)", content: "Analyze color grading and lighting contrast only — do not copy objects.", imageName: "", imageUrl: "" }
+            ]
+          },
+          {
+            id: uid(), title: "Constraints", type: "Constraints", expanded: false,
+            fields: [
+              { id: uid(), kind: "positive", name: "Must Include", content: "Shallow depth of field, smooth camera push-in, crisp metallic reflections." },
+              { id: uid(), kind: "negative", name: "Avoid", content: "No warped hands, no text overlays, no sudden jump cuts." }
+            ]
+          }
+        ]
+      },
+      "video-analyst": {
+        label: "Video Analyst Pipeline",
+        title: "Video Analyst Pipeline",
+        blocks: [
+          {
+            id: uid(), title: "Overarching Request", type: "Overarching Request", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "Analysis Goal", content: "Audit the uploaded video for pacing, visual continuity, and audio-visual sync." }
+            ]
+          },
+          {
+            id: uid(), title: "Model & Source Video", type: "Model & Task", expanded: false,
+            fields: [
+              { id: uid(), kind: "text", name: "Analyst Model", content: "Multimodal Video Analyst" },
+              { id: uid(), kind: "text", name: "Video Clip / Timestamps", content: "product_cut_v2.mp4 (00:00 - 00:45)" }
+            ]
+          },
+          {
+            id: uid(), title: "Evaluation Criteria", type: "Subject Details", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "Hook Effectiveness", content: "Assess first 3 seconds for viewer retention." },
+              { id: uid(), kind: "text", name: "Continuity Errors", content: "Flag any wardrobe, lighting, or prop mismatches between cuts." }
+            ]
+          },
+          {
+            id: uid(), title: "Constraints", type: "Constraints", expanded: false,
+            fields: [
+              { id: uid(), kind: "positive", name: "Output Structure", content: "List findings with exact timestamps and actionable fixes." },
+              { id: uid(), kind: "negative", name: "Exclude", content: "Do not summarize plot; focus strictly on visual/editorial critique." }
+            ]
+          }
+        ]
+      },
+      "visual-study": {
+        label: "Visual Analyst (Two-Item Study)",
+        title: "Visual Analyst — Two-Item Study",
+        blocks: [
+          {
+            id: uid(), title: "Overarching Request", type: "Overarching Request", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "Study Objective", content: "Compare Item A and Item B side-by-side for material quality and design consistency." }
+            ]
+          },
+          {
+            id: uid(), title: "Items to Study", type: "Reference Photos", expanded: true,
+            fields: [
+              { id: uid(), kind: "image", name: "Item A (Reference Photo)", content: "Baseline prototype sample.", imageName: "", imageUrl: "" },
+              { id: uid(), kind: "image", name: "Item B (Reference Photo)", content: "Updated production sample.", imageName: "", imageUrl: "" }
+            ]
+          },
+          {
+            id: uid(), title: "Comparison Form", type: "Custom Section", expanded: true,
+            fields: [
+              { id: uid(), kind: "text", name: "Color & Finish", content: "Compare surface texture, sheen, and color accuracy." },
+              { id: uid(), kind: "text", name: "Stitching / Proportions", content: "Identify any alignment or proportion drift." }
+            ]
+          },
+          {
+            id: uid(), title: "Constraints", type: "Constraints", expanded: false,
+            fields: [
+              { id: uid(), kind: "positive", name: "Report Style", content: "Present a clear comparison table followed by a pass/fail recommendation." },
+              { id: uid(), kind: "negative", name: "Avoid", content: "Do not guess dimensions that are not visually verifiable." }
+            ]
+          }
+        ]
+      },
+      "blank": {
+        label: "Blank Pipeline",
+        title: "Untitled Pipeline",
+        blocks: [
+          {
+            id: uid(), title: "Overarching Request", type: "Overarching Request", expanded: true,
+            fields: [{ id: uid(), kind: "text", name: "Request", content: "" }]
+          }
+        ]
+      }
+    };
+
+    function loadCustomTemplates() {
+      try {
+        return JSON.parse(localStorage.getItem("vp_custom_templates") || "{}");
+      } catch {
+        return {};
+      }
+    }
+
+    function getAllTemplates() {
+      return { ...DEFAULT_TEMPLATES, ...loadCustomTemplates() };
+    }
+
+    function cloneTemplate(tpl) {
+      return {
+        title: tpl.title,
+        blocks: tpl.blocks.map(b => ({
+          ...b,
+          id: uid(),
+          fields: b.fields.map(f => ({ ...f, id: uid() }))
+        }))
+      };
+    }
+
+    let state = {
+      templateKey: "video-gen",
+      ...cloneTemplate(DEFAULT_TEMPLATES["video-gen"])
+    };
+
+    const esc = (str = "") =>
+      String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    function renderTemplateSelect() {
+      const sel = document.getElementById("templateSelect");
+      const all = getAllTemplates();
+      sel.innerHTML = Object.entries(all)
+        .map(([k, v]) => `<option value="${esc(k)}" ${k === state.templateKey ? "selected" : ""}>${esc(v.label)}</option>`)
+        .join("");
+    }
+
+    function renderMarkdown() {
+      const lines = [];
+      lines.push(`# ${state.title.trim() || "Pipeline"}`);
+      lines.push("");
+
+      state.blocks.forEach((block, idx) => {
+        lines.push(`## ${idx + 1}. ${block.title.trim() || block.type}`);
+        if (!block.fields.length) {
+          lines.push(`*(No fields added)*`);
+        } else {
+          block.fields.forEach(f => {
+            const label = f.name.trim() || "Field";
+            const content = f.content.trim();
+            if (f.kind === "positive") {
+              lines.push(`- **[POSITIVE] ${label}:** ${content || "—"}`);
+            } else if (f.kind === "negative") {
+              lines.push(`- **[NEGATIVE] ${label}:** ${content || "—"}`);
+            } else if (f.kind === "image") {
+              const imgTag = f.imageName ? ` \`[${f.imageName}]\`` : " `[No image attached]`";
+              lines.push(`- **[PHOTO REF] ${label}**${imgTag}: ${content || "—"}`);
+            } else {
+              if (content.includes("\n")) {
+                lines.push(`- **${label}:**`);
+                content.split("\n").forEach(line => lines.push(`  ${line}`));
+              } else {
+                lines.push(`- **${label}:** ${content || "—"}`);
+              }
+            }
+          });
+        }
+        lines.push("");
+      });
+
+      document.getElementById("markdownPreview").textContent = lines.join("\n").trim();
+    }
+
+    function renderBlocks() {
+      document.getElementById("pipelineTitle").value = state.title;
+      const stack = document.getElementById("pipelineStack");
+      stack.innerHTML = "";
+
+      state.blocks.forEach((block, idx) => {
+        if (idx > 0) {
+          const conn = document.createElement("div");
+          conn.className = "connector";
+          conn.innerHTML = `<div class="connector-line"></div><div class="connector-arrow">▼</div>`;
+          stack.appendChild(conn);
+        }
+
+        const card = document.createElement("div");
+        card.className = `block ${block.expanded ? "expanded" : ""}`;
+
+        const fieldsHtml = block.fields.map(f => `
+          <div class="field-row" data-kind="${esc(f.kind)}">
+            <div class="field-top">
+              <select class="field-kind" data-action="change-kind" data-bid="${block.id}" data-fid="${f.id}">
+                <option value="text" ${f.kind === "text" ? "selected" : ""}>Form Field</option>
+                <option value="image" ${f.kind === "image" ? "selected" : ""}>Photo Ref</option>
+                <option value="positive" ${f.kind === "positive" ? "selected" : ""}>+ Positive</option>
+                <option value="negative" ${f.kind === "negative" ? "selected" : ""}>- Negative</option>
+              </select>
+              <input
+                type="text"
+                class="field-name"
+                placeholder="Field name (e.g., Subject Outfit)"
+                value="${esc(f.name)}"
+                data-action="edit-field-name"
+                data-bid="${block.id}"
+                data-fid="${f.id}"
+              />
+              <button class="icon-btn danger" data-action="remove-field" data-bid="${block.id}" data-fid="${f.id}" title="Remove field">✕</button>
+            </div>
+            ${f.kind === "image" ? `
+              <div class="image-row">
+                <input type="file" accept="image/*" data-action="upload-image" data-bid="${block.id}" data-fid="${f.id}" />
+                ${f.imageUrl ? `<img class="image-preview" src="${esc(f.imageUrl)}" alt="Preview" />` : ""}
+                ${f.imageName ? `<span class="image-filename">${esc(f.imageName)}</span>` : ""}
+              </div>
+            ` : ""}
+            <textarea
+              class="field-content"
+              placeholder="${f.kind === 'image' ? 'Describe how the model should use this photo (e.g., apply to subject, scene backdrop, or analysis-only)...' : 'Enter content for this field...'}"
+              data-action="edit-field-content"
+              data-bid="${block.id}"
+              data-fid="${f.id}"
+            >${esc(f.content)}</textarea>
+          </div>
+        `).join("");
+
+        const typeOptions = BLOCK_TYPES.map(t =>
+          `<option value="${esc(t)}" ${t === block.type ? "selected" : ""}>${esc(t)}</option>`
+        ).join("");
+
+        card.innerHTML = `
+          <div class="block-head" data-action="toggle-block" data-bid="${block.id}">
+            <div class="block-head-left">
+              <span class="step-badge">${idx + 1}</span>
+              <span class="block-title-display">${esc(block.title || block.type)}</span>
+              <span class="block-meta">(${block.fields.length} ${block.fields.length === 1 ? "field" : "fields"})</span>
+            </div>
+            <div class="block-actions">
+              <button class="icon-btn" data-action="move-up" data-bid="${block.id}" ${idx === 0 ? "disabled" : ""} title="Move Up">↑</button>
+              <button class="icon-btn" data-action="move-down" data-bid="${block.id}" ${idx === state.blocks.length - 1 ? "disabled" : ""} title="Move Down">↓</button>
+              <button class="icon-btn danger" data-action="remove-block" data-bid="${block.id}" title="Delete Block">✕</button>
+              <span class="chevron">▼</span>
+            </div>
+          </div>
+          <div class="block-body">
+            <div class="block-settings">
+              <label>
+                Block Name
+                <input type="text" value="${esc(block.title)}" data-action="edit-block-title" data-bid="${block.id}" />
+              </label>
+              <label>
+                Swap Block Type
+                <select data-action="swap-block-type" data-bid="${block.id}">${typeOptions}</select>
+              </label>
+            </div>
+            <div class="fields-list">${fieldsHtml}</div>
+            <div class="add-field-bar">
+              <button data-action="add-field" data-kind="text" data-bid="${block.id}">+ Form Field</button>
+              <button data-action="add-field" data-kind="image" data-bid="${block.id}">+ Photo Ref</button>
+              <button data-action="add-field" data-kind="positive" data-bid="${block.id}">+ Positive Rule</button>
+              <button data-action="add-field" data-kind="negative" data-bid="${block.id}">+ Negative Rule</button>
+            </div>
+          </div>
+        `;
+        stack.appendChild(card);
+      });
+
+      renderMarkdown();
+    }
+
+    function findBlock(bid) {
+      return state.blocks.find(b => b.id === bid);
+    }
+
+    // Event delegation for smooth typing (only updates markdown on text input, no DOM wipe)
+    document.getElementById("pipelineTitle").addEventListener("input", e => {
+      state.title = e.target.value;
+      renderMarkdown();
+    });
+
+    const stackEl = document.getElementById("pipelineStack");
+
+    stackEl.addEventListener("input", e => {
+      const { action, bid, fid } = e.target.dataset;
+      if (!action) return;
+      const block = findBlock(bid);
+      if (!block) return;
+
+      if (action === "edit-block-title") {
+        block.title = e.target.value;
+        const display = e.target.closest(".block").querySelector(".block-title-display");
+        if (display) display.textContent = block.title || block.type;
+        renderMarkdown();
+      } else if (action === "edit-field-name") {
+        const field = block.fields.find(f => f.id === fid);
+        if (field) { field.name = e.target.value; renderMarkdown(); }
+      } else if (action === "edit-field-content") {
+        const field = block.fields.find(f => f.id === fid);
+        if (field) { field.content = e.target.value; renderMarkdown(); }
+      }
+    });
+
+    stackEl.addEventListener("change", e => {
+      const { action, bid, fid } = e.target.dataset;
+      if (!action) return;
+      const block = findBlock(bid);
+      if (!block) return;
+
+      if (action === "swap-block-type") {
+        block.type = e.target.value;
+        if (BLOCK_TYPES.includes(block.title)) block.title = e.target.value;
+        renderBlocks();
+      } else if (action === "change-kind") {
+        const field = block.fields.find(f => f.id === fid);
+        if (field) { field.kind = e.target.value; renderBlocks(); }
+      } else if (action === "upload-image") {
+        const file = e.target.files[0];
+        const field = block.fields.find(f => f.id === fid);
+        if (file && field) {
+          field.imageName = file.name;
+          const reader = new FileReader();
+          reader.onload = ev => {
+            field.imageUrl = ev.target.result;
+            renderBlocks();
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    });
+
+    stackEl.addEventListener("click", e => {
+      const target = e.target.closest("[data-action]");
+      if (!target) return;
+      const { action, bid, fid, kind } = target.dataset;
+
+      // Ignore clicks on buttons inside block-head when toggling collapse
+      if (action === "toggle-block" && e.target.closest(".block-actions")) return;
+
+      const idx = state.blocks.findIndex(b => b.id === bid);
+      const block = state.blocks[idx];
+
+      if (action === "toggle-block" && block) {
+        block.expanded = !block.expanded;
+        renderBlocks();
+      } else if (action === "move-up" && idx > 0) {
+        [state.blocks[idx - 1], state.blocks[idx]] = [state.blocks[idx], state.blocks[idx - 1]];
+        renderBlocks();
+      } else if (action === "move-down" && idx < state.blocks.length - 1) {
+        [state.blocks[idx + 1], state.blocks[idx]] = [state.blocks[idx], state.blocks[idx + 1]];
+        renderBlocks();
+      } else if (action === "remove-block" && idx > -1) {
+        state.blocks.splice(idx, 1);
+        renderBlocks();
+      } else if (action === "add-field" && block) {
+        block.fields.push({
+          id: uid(),
+          kind: kind || "text",
+          name: "",
+          content: "",
+          imageName: "",
+          imageUrl: ""
+        });
+        renderBlocks();
+      } else if (action === "remove-field" && block) {
+        block.fields = block.fields.filter(f => f.id !== fid);
+        renderBlocks();
+      }
+    });
+
+    // Topbar actions
+    document.getElementById("templateSelect").addEventListener("change", e => {
+      const key = e.target.value;
+      const all = getAllTemplates();
+      if (all[key]) {
+        state = { templateKey: key, ...cloneTemplate(all[key]) };
+        renderBlocks();
+      }
+    });
+
+    document.getElementById("saveTemplateBtn").addEventListener("click", () => {
+      const name = prompt("Name this reusable template:", state.title || "My Pipeline");
+      if (!name || !name.trim()) return;
+      const key = "custom-" + uid();
+      const custom = loadCustomTemplates();
+      custom[key] = {
+        label: "★ " + name.trim(),
+        title: name.trim(),
+        blocks: state.blocks.map(b => ({
+          ...b,
+          fields: b.fields.map(f => ({ ...f, imageUrl: "" })) // avoid blowing localStorage quota with base64 images
+        }))
+      };
+      localStorage.setItem("vp_custom_templates", JSON.stringify(custom));
+      state.templateKey = key;
+      renderTemplateSelect();
+      alert(`Saved "${name.trim()}" to the Template dropdown!`);
+    });
+
+    document.getElementById("expandAllBtn").addEventListener("click", () => {
+      state.blocks.forEach(b => (b.expanded = true));
+      renderBlocks();
+    });
+
+    document.getElementById("collapseAllBtn").addEventListener("click", () => {
+      state.blocks.forEach(b => (b.expanded = false));
+      renderBlocks();
+    });
+
+    document.getElementById("addBlockBtn").addEventListener("click", () => {
+      state.blocks.push({
+        id: uid(),
+        title: "Custom Section",
+        type: "Custom Section",
+        expanded: true,
+        fields: [{ id: uid(), kind: "text", name: "", content: "" }]
+      });
+      renderBlocks();
+    });
+
+    document.getElementById("copyMdBtn").addEventListener("click", async () => {
+      const text = document.getElementById("markdownPreview").textContent;
+      await navigator.clipboard.writeText(text);
+      const btn = document.getElementById("copyMdBtn");
+      btn.textContent = "Copied!";
+      setTimeout(() => (btn.textContent = "Copy Markdown"), 1500);
+    });
+
+    document.getElementById("downloadMdBtn").addEventListener("click", () => {
+      const text = document.getElementById("markdownPreview").textContent;
+      const blob = new Blob([text], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (state.title || "pipeline").toLowerCase().replace(/[^a-z0-9]+/g, "-") + ".md";
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Init
+    renderTemplateSelect();
+    renderBlocks();
+  </script>
+</body>
+</html>
+```
+
+Try loading it up, adding a custom field like **`Subject Outfit`** inside a block, and watching the Markdown compile on the right. Let me know if you want to tweak the layout, add new default templates, or export to JSON/YAML alongside Markdown!

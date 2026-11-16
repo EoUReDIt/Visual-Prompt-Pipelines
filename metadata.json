@@ -1,0 +1,6 @@
+{
+  "name": "Pipeline Studio",
+  "description": "Visual top-down prompt and AI pipeline builder with dynamic block forms, reference photo roles, reusable templates, and live Markdown, JSON, and YAML compilation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
