@@ -3,6 +3,7 @@ import {
   BookmarkPlus,
   ChevronsDownUp,
   ChevronsUpDown,
+  Cpu,
   Download,
   Moon,
   Plus,
@@ -10,15 +11,19 @@ import {
   Sun,
   Trash2,
 } from 'lucide-react';
+import { AiAssistantBar } from './components/AiAssistantBar';
 import { BlockCard } from './components/BlockCard';
 import { InsertConnector } from './components/InsertConnector';
 import { OutputPanel } from './components/OutputPanel';
 import { SaveTemplateModal } from './components/SaveTemplateModal';
 import { createUid, DEFAULT_TEMPLATES, instantiateTemplate } from './data/defaultTemplates';
+import { useLocalAi } from './hooks/useLocalAi';
+import { AiFeatureConfig } from './types/ai';
 import {
   BlockType,
   FieldKind,
   OutputFormat,
+  PhotoRole,
   PipelineBlock,
   PipelineField,
   PipelineTemplate,
@@ -26,10 +31,20 @@ import {
 import { compilePipelineOutput } from './utils/compileOutput';
 
 const CUSTOM_TEMPLATES_STORAGE_KEY = 'pipeline_studio_custom_templates_v1';
+const DELETED_BUILTINS_STORAGE_KEY = 'pipeline_studio_deleted_builtins_v1';
 const DRAFT_STORAGE_KEY = 'pipeline_studio_draft_v1';
 const THEME_STORAGE_KEY = 'pipeline_studio_theme_v1';
+const AI_CONFIG_STORAGE_KEY = 'pipeline_studio_ai_config_v1';
 
 const QUICK_NAV_KEYS = ['video-gen', 'video-analyst', 'visual-study', 'blank'] as const;
+
+const DEFAULT_AI_CONFIG: AiFeatureConfig = {
+  enabled: false,
+  modelId: 'Xenova/t5-small',
+  spellCheck: true,
+  autoComplete: true,
+  fieldSuggestions: true,
+};
 
 function loadCustomTemplates(): Record<string, PipelineTemplate> {
   try {
@@ -38,6 +53,28 @@ function loadCustomTemplates(): Record<string, PipelineTemplate> {
   } catch {
     return {};
   }
+}
+
+function loadDeletedBuiltIns(): string[] {
+  try {
+    const raw = localStorage.getItem(DELETED_BUILTINS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadAiConfig(): AiFeatureConfig {
+  try {
+    const raw = localStorage.getItem(AI_CONFIG_STORAGE_KEY);
+    if (raw) {
+      return { ...DEFAULT_AI_CONFIG, ...JSON.parse(raw) };
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULT_AI_CONFIG;
 }
 
 function loadInitialDraft(): {
@@ -66,6 +103,9 @@ export default function App() {
   const [customTemplates, setCustomTemplates] = useState<Record<string, PipelineTemplate>>(
     () => loadCustomTemplates()
   );
+  const [deletedBuiltInKeys, setDeletedBuiltInKeys] = useState<string[]>(() =>
+    loadDeletedBuiltIns()
+  );
 
   const initialDraft = useMemo(() => loadInitialDraft(), []);
   const [templateKey, setTemplateKey] = useState<string>(initialDraft.templateKey);
@@ -75,7 +115,13 @@ export default function App() {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>('markdown');
   const [includeEmpty, setIncludeEmpty] = useState<boolean>(true);
   const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [confirmDeleteTemplate, setConfirmDeleteTemplate] = useState<boolean>(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [aiConfig, setAiConfig] = useState<AiFeatureConfig>(() => loadAiConfig());
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState<boolean>(false);
+
+  const localAi = useLocalAi();
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -106,12 +152,19 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem(AI_CONFIG_STORAGE_KEY, JSON.stringify(aiConfig));
+    } catch {
+      // ignore
+    }
+  }, [aiConfig]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem(
         DRAFT_STORAGE_KEY,
         JSON.stringify({ templateKey, title: pipelineTitle, blocks })
       );
     } catch {
-      // If embedded images exceed localStorage quota, save structure without base64 imageUrls
       try {
         const strippedBlocks = blocks.map((b) => ({
           ...b,
@@ -133,9 +186,19 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  const builtInTemplates = useMemo(() => {
+    const entries: Record<string, PipelineTemplate> = {};
+    Object.entries(DEFAULT_TEMPLATES).forEach(([key, tpl]) => {
+      if (!deletedBuiltInKeys.includes(key)) {
+        entries[key] = tpl;
+      }
+    });
+    return entries;
+  }, [deletedBuiltInKeys]);
+
   const allTemplates = useMemo(
-    () => ({ ...DEFAULT_TEMPLATES, ...customTemplates }),
-    [customTemplates]
+    () => ({ ...builtInTemplates, ...customTemplates }),
+    [builtInTemplates, customTemplates]
   );
 
   const activeTemplate = allTemplates[templateKey];
@@ -164,6 +227,7 @@ export default function App() {
     setTemplateKey(key);
     setPipelineTitle(next.title);
     setBlocks(next.blocks);
+    setConfirmDeleteTemplate(false);
   };
 
   const handleSaveCustomTemplate = (name: string, description: string) => {
@@ -195,26 +259,64 @@ export default function App() {
     setTemplateKey(key);
     setPipelineTitle(name);
     setIsSaveModalOpen(false);
+    setConfirmDeleteTemplate(false);
     setNotice(`Saved "${name}" to templates`);
   };
 
-  const handleDeleteCustomTemplate = () => {
-    if (!activeTemplate?.isCustom) return;
-    const removedLabel = activeTemplate.label;
-    const nextCustom = { ...customTemplates };
-    delete nextCustom[templateKey];
-    setCustomTemplates(nextCustom);
+  const handleDeleteTemplate = () => {
+    const remainingKeys = Object.keys(allTemplates).filter((k) => k !== templateKey);
+    if (remainingKeys.length === 0) return;
+
+    const deletedLabel = activeTemplate?.label || 'Template';
+
+    if (activeTemplate?.isCustom) {
+      const nextCustom = { ...customTemplates };
+      delete nextCustom[templateKey];
+      setCustomTemplates(nextCustom);
+      try {
+        localStorage.setItem(CUSTOM_TEMPLATES_STORAGE_KEY, JSON.stringify(nextCustom));
+      } catch {
+        // ignore
+      }
+    } else if (DEFAULT_TEMPLATES[templateKey]) {
+      const nextDeleted = Array.from(new Set([...deletedBuiltInKeys, templateKey]));
+      setDeletedBuiltInKeys(nextDeleted);
+      try {
+        localStorage.setItem(DELETED_BUILTINS_STORAGE_KEY, JSON.stringify(nextDeleted));
+      } catch {
+        // ignore
+      }
+    }
+
+    const fallbackKey = remainingKeys[0];
+    const fallbackTpl = allTemplates[fallbackKey];
+    if (fallbackTpl) {
+      const next = instantiateTemplate(fallbackTpl);
+      setTemplateKey(fallbackKey);
+      setPipelineTitle(next.title);
+      setBlocks(next.blocks);
+    }
+
+    setConfirmDeleteTemplate(false);
+    setNotice(`Deleted "${deletedLabel}"`);
+  };
+
+  const handleRestoreBuiltInTemplates = () => {
+    setDeletedBuiltInKeys([]);
     try {
-      localStorage.setItem(CUSTOM_TEMPLATES_STORAGE_KEY, JSON.stringify(nextCustom));
+      localStorage.removeItem(DELETED_BUILTINS_STORAGE_KEY);
     } catch {
       // ignore
     }
-    selectTemplate('video-gen');
-    setNotice(`Removed template "${removedLabel}"`);
+    setConfirmDeleteTemplate(false);
+    setNotice('Restored built-in templates');
   };
 
   const handleResetTemplate = () => {
-    const tpl = allTemplates[templateKey] || DEFAULT_TEMPLATES['video-gen'];
+    const tpl =
+      allTemplates[templateKey] ||
+      Object.values(allTemplates)[0] ||
+      DEFAULT_TEMPLATES['blank'];
     const next = instantiateTemplate(tpl);
     setPipelineTitle(next.title);
     setBlocks(next.blocks);
@@ -304,13 +406,23 @@ export default function App() {
     );
   };
 
-  const handleAddField = (blockId: string, kind: FieldKind) => {
+  const handleAddField = (
+    blockId: string,
+    kind: FieldKind,
+    initial?: { name?: string; content?: string; photoRole?: PhotoRole }
+  ) => {
     const newField: PipelineField = {
       id: createUid(),
       kind,
-      name: '',
-      content: '',
-      ...(kind === 'image' ? { photoRole: 'Subject Ref', imageName: '', imageUrl: '' } : {}),
+      name: initial?.name || '',
+      content: initial?.content || '',
+      ...(kind === 'image'
+        ? {
+            photoRole: initial?.photoRole || 'Subject Ref',
+            imageName: '',
+            imageUrl: '',
+          }
+        : {}),
     };
     setBlocks((prev) =>
       prev.map((b) =>
@@ -415,7 +527,18 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const handleToggleAiAssistant = () => {
+    setAiConfig((prev) => {
+      const nextEnabled = !prev.enabled;
+      if (nextEnabled) setIsAiPanelOpen(true);
+      else setIsAiPanelOpen(false);
+      return { ...prev, enabled: nextEnabled };
+    });
+  };
+
+  const builtInEntries = Object.values(builtInTemplates);
   const customTemplateEntries = Object.values(customTemplates);
+  const totalTemplatesCount = Object.keys(allTemplates).length;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors duration-150 dark:bg-slate-950 dark:text-slate-100">
@@ -455,8 +578,8 @@ export default function App() {
             aria-label="Pipeline presets"
             className="hidden items-center gap-6 md:flex"
           >
-            {QUICK_NAV_KEYS.map((key) => {
-              const tpl = DEFAULT_TEMPLATES[key];
+            {QUICK_NAV_KEYS.filter((key) => Boolean(allTemplates[key])).map((key) => {
+              const tpl = allTemplates[key];
               const isActive = templateKey === key;
               const shortNames: Record<string, string> = {
                 'video-gen': 'Video Gen',
@@ -500,7 +623,7 @@ export default function App() {
         {/* Workspace Toolbar */}
         <section
           aria-label="Template and view controls"
-          className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800"
         >
           <div className="flex flex-wrap items-center gap-2.5">
             <label
@@ -511,17 +634,19 @@ export default function App() {
             </label>
             <select
               id="template-selector"
-              value={templateKey}
+              value={allTemplates[templateKey] ? templateKey : ''}
               onChange={(e) => selectTemplate(e.target.value)}
               className="h-9 min-w-[220px] rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
             >
-              <optgroup label="Built-in Pipelines">
-                {Object.values(DEFAULT_TEMPLATES).map((tpl) => (
-                  <option key={tpl.key} value={tpl.key}>
-                    {tpl.label}
-                  </option>
-                ))}
-              </optgroup>
+              {builtInEntries.length > 0 && (
+                <optgroup label="Built-in Pipelines">
+                  {builtInEntries.map((tpl) => (
+                    <option key={tpl.key} value={tpl.key}>
+                      {tpl.label}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
               {customTemplateEntries.length > 0 && (
                 <optgroup label="Saved Custom Templates">
                   {customTemplateEntries.map((tpl) => (
@@ -542,14 +667,48 @@ export default function App() {
               <span>Save as Template</span>
             </button>
 
-            {activeTemplate?.isCustom && (
+            {/* Delete Option for ANY Selected Template */}
+            {activeTemplate &&
+              totalTemplatesCount > 1 &&
+              (confirmDeleteTemplate ? (
+                <div className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 dark:border-red-900/60 dark:bg-red-950/30">
+                  <span className="text-xs font-medium text-red-700 dark:text-red-300">
+                    Delete template?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDeleteTemplate}
+                    className="whitespace-nowrap rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white hover:bg-red-500"
+                  >
+                    Confirm
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteTemplate(false)}
+                    className="whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteTemplate(true)}
+                  className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-500 dark:border-slate-800 dark:bg-slate-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete Template</span>
+                </button>
+              ))}
+
+            {deletedBuiltInKeys.length > 0 && (
               <button
                 type="button"
-                onClick={handleDeleteCustomTemplate}
-                className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-500 dark:border-slate-800 dark:bg-slate-900 dark:text-red-400 dark:hover:bg-red-950/40"
+                onClick={handleRestoreBuiltInTemplates}
+                className="inline-flex h-9 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span>Delete Template</span>
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Restore Defaults</span>
               </button>
             )}
 
@@ -574,6 +733,43 @@ export default function App() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {/* Opt-In Lightweight AI Assistant (<82M) Control */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!aiConfig.enabled) {
+                  handleToggleAiAssistant();
+                } else {
+                  setIsAiPanelOpen((v) => !v);
+                }
+              }}
+              aria-expanded={isAiPanelOpen}
+              className={`inline-flex h-9 items-center gap-1.5 whitespace-nowrap shrink-0 rounded-lg border px-3 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-indigo-500 ${
+                aiConfig.enabled
+                  ? 'border-indigo-500/60 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/50 dark:bg-indigo-950/50 dark:text-indigo-300 dark:hover:bg-indigo-950/80'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800'
+              }`}
+            >
+              <Cpu className="h-3.5 w-3.5" />
+              <span>
+                {aiConfig.enabled
+                  ? localAi.status === 'ready'
+                    ? 'AI Active (<82M)'
+                    : 'AI Assistant On'
+                  : 'Add AI Assistant (<82M)'}
+              </span>
+            </button>
+
+            {aiConfig.enabled && (
+              <button
+                type="button"
+                onClick={handleToggleAiAssistant}
+                className="inline-flex h-9 items-center whitespace-nowrap shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+              >
+                Disable AI
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => handleExpandCollapseAll(true)}
@@ -605,6 +801,25 @@ export default function App() {
             </button>
           </div>
         </section>
+
+        {/* Collapsible Lightweight <82M AI Model Bar */}
+        <AiAssistantBar
+          isOpen={isAiPanelOpen && aiConfig.enabled}
+          config={aiConfig}
+          modelStatus={localAi.status}
+          loadedModelId={localAi.loadedModelId}
+          progress={localAi.progress}
+          progressFile={localAi.progressFile}
+          error={localAi.error}
+          onClose={() => setIsAiPanelOpen(false)}
+          onUpdateConfig={(patch) =>
+            setAiConfig((prev) => ({ ...prev, ...patch }))
+          }
+          onLoadModel={(modelId) => {
+            void localAi.loadModel(modelId);
+          }}
+          onUnloadModel={localAi.unloadModel}
+        />
 
         {/* Two-Column Split: Top-Down Pipeline Stack + Live Compiled Output */}
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1.25fr_0.95fr]">
@@ -657,6 +872,9 @@ export default function App() {
                       block={block}
                       index={index}
                       totalBlocks={blocks.length}
+                      pipelineTitle={pipelineTitle}
+                      aiConfig={aiConfig}
+                      modelReady={localAi.status === 'ready'}
                       isDragging={dragIndex === index}
                       isDragOver={dragOverIndex === index && dragIndex !== index}
                       onToggleExpand={handleToggleBlock}
@@ -669,6 +887,9 @@ export default function App() {
                       onUpdateField={handleUpdateField}
                       onMoveField={handleMoveField}
                       onRemoveField={handleRemoveField}
+                      onRequestAiComplete={localAi.completeText}
+                      onRequestAiSpellFix={localAi.fixSpellingAi}
+                      onRequestAiFieldSuggestions={localAi.suggestFieldsAi}
                       onDragStart={handleDragStart}
                       onDragOver={handleDragOver}
                       onDrop={handleDrop}
